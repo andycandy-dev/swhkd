@@ -4,7 +4,7 @@ use config::Hotkey;
 use evdev::{AttributeSet, Device, InputEventKind, Key};
 use nix::{
     sys::stat::{umask, Mode},
-    unistd::{setgid, setuid, Gid, Uid},
+    unistd::{setgid, setuid, Gid, Uid, User},
 };
 use signal_hook::consts::signal::*;
 use signal_hook_tokio::Signals;
@@ -195,9 +195,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let log = log.clone();
 
             // Set the user and group id to the invoking user for the thread
-            setgid(Gid::from_raw(invoking_uid))
-                .expect(&format!("Failed to set group-id to {}", invoking_uid));
-            setuid(Uid::from_raw(invoking_uid))
+            let user_uid = Uid::from_raw(invoking_uid);
+            let user = User::from_uid(user_uid)
+                .expect("Failed to get user info")
+                .expect(&format!("User with UID {} not found", invoking_uid));
+
+            nix::unistd::initgroups(&user.gecos, user.gid)
+                .expect(&format!("Failed to set supplementary groups for UID {}", invoking_uid));
+            setgid(user.gid)
+                .expect(&format!("Failed to set group-id to {}", user.gid));
+            setuid(user_uid)
                 .expect(&format!("Failed to set user-id to {}", invoking_uid));
 
             // Command execution
