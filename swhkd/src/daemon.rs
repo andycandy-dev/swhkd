@@ -12,6 +12,7 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     error::Error,
+    ffi::CString,
     fs::{self, File, OpenOptions, Permissions},
     io::{Read, Write},
     os::unix::{fs::PermissionsExt, net::UnixStream},
@@ -200,7 +201,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .expect("Failed to get user info")
                 .expect(&format!("User with UID {} not found", invoking_uid));
 
-            nix::unistd::initgroups(&user.gecos, user.gid)
+            let username = CString::new(user.name.as_str())
+                .expect("Failed to convert username to CString");
+            nix::unistd::initgroups(&username, user.gid)
                 .expect(&format!("Failed to set supplementary groups for UID {}", invoking_uid));
             setgid(user.gid)
                 .expect(&format!("Failed to set group-id to {}", user.gid));
