@@ -335,6 +335,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut pending_release: bool = false;
     let mut keyboard_states = HashMap::new();
     let mut keyboard_stream_map = StreamMap::new();
+    let mut hotkey_pressed_keys: HashSet<Key> = HashSet::new();
 
     for (path, mut device) in keyboard_devices.into_iter() {
         let _ = device.grab();
@@ -517,10 +518,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     && !hotkey.is_send()
                         });
 
-                // Only emit event to virtual device when swallow option is off
-                if !modes[mode_stack[mode_stack.len()-1]].options.swallow
-                // Don't emit event to virtual device if it's from a valid hotkey
-                && !event_in_hotkeys {
+                // Determine if we should emit this event
+                let should_emit = if event.value() == 0 && hotkey_pressed_keys.contains(&key) {
+                    // This is a release event for a key that was part of an executed hotkey
+                    // We should emit it to properly release the key in the system
+                    hotkey_pressed_keys.remove(&key);
+                    true
+                } else {
+                    // Normal logic: only emit when swallow is off and not part of hotkey
+                    !modes[mode_stack[mode_stack.len()-1]].options.swallow && !event_in_hotkeys
+                };
+
+                if should_emit {
                     uinput_device.emit(&[event]).unwrap();
                 }
 
@@ -539,11 +548,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         && keyboard_state.state_keysyms.contains(hotkey.keysym())
                     {
                         last_hotkey = Some(hotkey.clone());
+
+                        // Track all currently pressed keys (modifiers + keysym) that are part of this hotkey
+                        // so we can emit their release events later
+                        // We do this for both regular and on_release hotkeys
+                        for key in keyboard_state.state_keysyms.iter() {
+                            hotkey_pressed_keys.insert(key);
+                        }
+                        for (phys_key, modifier) in &modifiers_map {
+                            if keyboard_state.state_modifiers.contains(modifier) {
+                                hotkey_pressed_keys.insert(*phys_key);
+                            }
+                        }
+
                         if pending_release { break; }
                         if hotkey.is_on_release() {
                             pending_release = true;
                             break;
                         }
+
                         send_command(hotkey.clone(), &modes, &mut mode_stack, tx.clone()).await;
                         hotkey_repeat_timer.as_mut().reset(Instant::now() + Duration::from_millis(repeat_cooldown_duration));
                         continue;
