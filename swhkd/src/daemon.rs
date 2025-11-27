@@ -15,7 +15,7 @@ use std::{
     ffi::CString,
     fs::{self, File, OpenOptions, Permissions},
     io::{Read, Write},
-    os::unix::{fs::PermissionsExt, net::UnixStream},
+    os::unix::{fs::PermissionsExt, net::UnixStream, process::CommandExt},
     path::{Path, PathBuf},
     process::{exit, id, Command, Stdio},
     sync::{Arc, Mutex},
@@ -195,25 +195,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let pairs = pairs.clone();
             let log = log.clone();
 
-            // Set the user and group id to the invoking user for the thread
+            // Command execution with user privileges
             let user_uid = Uid::from_raw(invoking_uid);
             let user = User::from_uid(user_uid)
                 .expect("Failed to get user info")
                 .expect(&format!("User with UID {} not found", invoking_uid));
 
-            let username = CString::new(user.name.as_str())
-                .expect("Failed to convert username to CString");
-            nix::unistd::initgroups(&username, user.gid)
-                .expect(&format!("Failed to set supplementary groups for UID {}", invoking_uid));
-            setgid(user.gid)
-                .expect(&format!("Failed to set group-id to {}", user.gid));
-            setuid(user_uid)
-                .expect(&format!("Failed to set user-id to {}", invoking_uid));
+            let username =
+                CString::new(user.name.as_str()).expect("Failed to convert username to CString");
 
-            // Command execution
             let mut cmd = Command::new("sh");
             cmd.arg("-c")
                 .arg(command)
+                .uid(invoking_uid)
+                .gid(user.gid.as_raw())
                 .stdin(Stdio::null())
                 .stdout(match File::open(&log) {
                     Ok(file) => file,
